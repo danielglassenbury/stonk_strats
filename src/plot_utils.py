@@ -51,3 +51,18 @@ def plot_heatmap(df: pd.DataFrame, figsize: tuple = (12, 8),
     # Add % to colourbar
     cbar_ax.yaxis.set_major_formatter(mtick.FuncFormatter(lambda x, pos: f'{x:.1f}%'))
     plt.show()
+
+
+def plot_yearly_boxplot(data:pd.DataFrame, bssr_label:float, ylim:tuple=(-5, 15)):
+    plt.figure(figsize=(12, 5))
+    sns.boxplot(x='year', y='pct_return', data=data)
+    plt.axhline(y=0, color='red', linestyle='--', linewidth=1)
+
+    # formatting
+    plt.xlabel("Year")
+    plt.ylabel("% Profit")
+    plt.title(f"Individual trade % return, grouped by year. BSSR = {bssr_label}")
+    plt.xticks(rotation=0)
+    plt.ylim(ylim)
+    plt.tight_layout()
+    plt.show()

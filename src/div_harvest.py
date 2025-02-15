@@ -2,24 +2,29 @@ import yfinance as yf
 import pandas as pd
 import time
 
-def cal_div_harvest(ticker_list: list, period: str, bssr: float = 0.5, data: 'pd.DataFrame' = None):
+def cal_div_harvest(ticker_list: list, period: str, bssr: float = 0.5, 
+                    investment: float = 1000, trading_fee: float = 0,
+                    data: pd.DataFrame = None):
     """
-    Simulate dividend harvesting trades over a specified period.
-    
+    Simulate dividend harvesting trades over a specified period, including trading fees
+    and a specified investment amount.
+
     Parameters:
         ticker_list (list): List of ticker symbols.
         period (str): The period over which to retrieve historical data (e.g., '20y').
         bssr (float): Buy Sell Success Rate, a value between 0 and 1.
-                      1 means best luck (buy at low, sell at high),
-                      0 means worst luck (buy at high, sell at low),
-                      and 0.5 means neutral (buy/sell at midpoint).
+                      1 means best luck (buy at daily low, sell at daily high),
+                      0 means worst luck (buy at daily high, sell at daily low),
+                      and 0.5 means neutral (buy/sell at daily midpoints).
+        investment (float): The amount invested per trade (default is 1000).
+        trading_fee (float): The trading fee applied on both buy and sell (default is 3).
         data (pd.DataFrame, optional): Preloaded historical data for all tickers.
                                        If provided, should include a 'Ticker' column.
     
     Returns:
         results_profit (pd.DataFrame): Aggregated profit per ticker by year.
         results_pct (pd.DataFrame): Aggregated percentage returns per ticker by year.
-        results_trades (dict): Detailed trade information for each ticker.
+        df_trade_summary (pd.DataFrame): Detailed trade information for each ticker.
     """
     import yfinance as yf
     import pandas as pd
@@ -93,7 +98,8 @@ def cal_div_harvest(ticker_list: list, period: str, bssr: float = 0.5, data: 'pd
                 daily_high_buy = hist_data.loc[buy_date, 'High']
                 daily_low_buy = hist_data.loc[buy_date, 'Low']
 
-                # Calculate buy price based on bssr
+                # Calculate the buy price based on bssr:
+                # When bssr = 1, buy at daily low; when 0, buy at daily high.
                 buy_price = (1 - bssr) * daily_high_buy + bssr * daily_low_buy
 
                 # Check for negative buy price. If found, skip this ticker.
@@ -107,15 +113,27 @@ def cal_div_harvest(ticker_list: list, period: str, bssr: float = 0.5, data: 'pd
                 daily_high_sell = hist_data.loc[sell_date, 'High']
                 daily_low_sell = hist_data.loc[sell_date, 'Low']
 
-                # Calculate sell price based on bssr
+                # Calculate the sell price based on bssr:
+                # When bssr = 1, sell at daily high; when 0, sell at daily low.
                 sell_price = bssr * daily_high_sell + (1 - bssr) * daily_low_sell
 
-                # Dividend received on the ex-dividend date
+                # Dividend received on the ex-dividend date (per share)
                 dividend = hist_data.loc[ex_div_date, 'Dividends']
 
-                # Calculate profit and percentage return
-                profit = (sell_price + dividend) - buy_price
-                pct_return = profit / buy_price * 100
+                # Number of shares purchased
+                shares = (investment - trading_fee) / buy_price
+
+                # Proceeds after fees
+                sell_proceeds = shares * sell_price - trading_fee
+
+                # Total dividend received from holding the shares
+                total_dividend = shares * dividend
+
+                # Total profit: (sell proceeds + dividend) minus the original investment.
+                profit = (sell_proceeds + total_dividend) - investment
+
+                # Percentage return relative to the investment.
+                pct_return = profit / investment * 100
 
                 # Use the ex-dividend date's year for grouping
                 year = ex_div_date.year
@@ -130,6 +148,10 @@ def cal_div_harvest(ticker_list: list, period: str, bssr: float = 0.5, data: 'pd
                     "buy_price": buy_price,
                     "sell_price": sell_price,
                     "dividend": dividend,
+                    "investment": investment,
+                    "shares": shares,
+                    "sell_proceeds": sell_proceeds,
+                    "total_dividend": total_dividend,
                     "profit": profit,
                     "pct_return": pct_return,
                     "year": year
@@ -163,4 +185,12 @@ def cal_div_harvest(ticker_list: list, period: str, bssr: float = 0.5, data: 'pd
     results_profit = pd.DataFrame.from_dict(results_yearly, orient='index').fillna(0)
     results_profit = results_profit[sorted(results_profit.columns, key=int)]
 
-    return results_profit, results_pct, results_trades
+    # Convert the individual trade results to a DataFrame.
+    trade_summary = []
+    for ticker, trades in results_trades.items():
+        for trade in trades:
+            trade["ticker"] = ticker
+            trade_summary.append(trade)
+    df_trade_summary = pd.DataFrame(trade_summary)
+
+    return results_profit, results_pct, df_trade_summary
