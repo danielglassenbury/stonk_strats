@@ -5,6 +5,7 @@ import matplotlib.dates as mdates
 import pandas as pd
 import numpy as np
 import calendar
+import plotly.graph_objects as go
 
 
 def plot_heatmap(df: pd.DataFrame, 
@@ -548,3 +549,210 @@ def plot_vintage_ratio(trade_df: pd.DataFrame,
     plt.grid(True)
     plt.tight_layout()
     plt.show()
+
+
+
+
+def plot_vintage_analysis_plotly(trade_df: pd.DataFrame, 
+                                 initial_investment: float = 3000, 
+                                 min_year: int = None,
+                                 max_year: int = None,
+                                 dummy_year: int = 2000):
+    """
+    Creates an interactive vintage analysis plot with daily granularity for the dividend harvesting strategy using Plotly.
+    Each year's running total of capital is simulated (starting at initial_investment) and the dates are rebased
+    to a common dummy year (default 2000) so that all vintages begin at January 1. This allows direct intra-year comparisons.
+    
+    For each year (vintage), the function:
+      - Starts with the initial investment on January 1.
+      - Updates the running total at each dividend event (using the 'profit' from that trade).
+      - Fills forward to provide a daily series.
+      - Rebases the dates to the dummy year.
+    
+    Optionally, only trades for years >= min_year and <= max_year are included.
+    
+    Parameters:
+        trade_df (pd.DataFrame): DataFrame containing trade data with at least:
+            - 'ex_div_date': The datetime when the dividend event occurred.
+            - 'profit': The profit (or loss) from that trade.
+            - 'year': (Optional) The year of the dividend event; if missing, it will be extracted from 'ex_div_date'.
+        initial_investment (float): The starting capital for each year.
+        min_year (int, optional): Only include trades for years >= min_year.
+        max_year (int, optional): Only include trades for years <= max_year.
+        dummy_year (int): The year to which all dates are rebased for plotting (default is 2000).
+    
+    Returns:
+        None. Displays an interactive Plotly plot.
+    """
+    # Ensure ex_div_date is datetime.
+    trade_df = trade_df.copy()
+    trade_df['ex_div_date'] = pd.to_datetime(trade_df['ex_div_date'])
+    
+    # Create a 'year' column if not present.
+    if 'year' not in trade_df.columns:
+        trade_df['year'] = trade_df['ex_div_date'].dt.year
+    
+    # Filter by min_year and max_year if provided.
+    if min_year is not None:
+        trade_df = trade_df[trade_df['year'] >= min_year]
+    if max_year is not None:
+        trade_df = trade_df[trade_df['year'] <= max_year]
+    
+    # Create a Plotly figure.
+    fig = go.Figure()
+    
+    # Group trades by year.
+    grouped = trade_df.groupby('year')
+    
+    for year, group in grouped:
+        group = group.sort_values(by='ex_div_date')
+        
+        # Create a full daily date range for the year.
+        daily_index = pd.date_range(start=f"{year}-01-01", end=f"{year}-12-31", freq='D')
+        
+        # Start with the initial investment on January 1.
+        event_dates = [pd.Timestamp(f"{year}-01-01")]
+        cumulative_capital = [initial_investment]
+        current_capital = initial_investment
+        
+        # Update the running total at each trade event.
+        for _, row in group.iterrows():
+            trade_date = row['ex_div_date'].normalize()  # drop time component
+            current_capital += row['profit']
+            event_dates.append(trade_date)
+            cumulative_capital.append(current_capital)
+        
+        # Create a Series from the event dates and capital.
+        s = pd.Series(data=cumulative_capital, index=event_dates)
+        # If multiple trades occur on the same day, keep the last value.
+        s = s.groupby(s.index).last()
+        # Reindex to the full daily range and forward-fill.
+        daily_capital = s.reindex(daily_index, method='ffill')
+        
+        # Rebase the daily_index to the dummy year.
+        dummy_index = daily_index.map(lambda d: d.replace(year=dummy_year))
+        
+        # Add a trace for this vintage.
+        fig.add_trace(go.Scatter(
+            x=pd.to_datetime(dummy_index),
+            y=daily_capital.values,
+            mode='lines',
+            name=str(year)
+        ))
+    
+    # Add a horizontal line for the initial investment.
+    fig.add_shape(
+        type="line",
+        x0=pd.to_datetime(f"{dummy_year}-01-01"),
+        y0=initial_investment,
+        x1=pd.to_datetime(f"{dummy_year}-12-31"),
+        y1=initial_investment,
+        line=dict(color="red", dash="dash"),
+        xref="x",
+        yref="y"
+    )
+    
+    # Update the layout.
+    fig.update_layout(
+        title="Vintage Analysis: Daily Running Total Capital by Year",
+        xaxis_title="Month",
+        yaxis_title="Total Capital ($)",
+        legend_title="Year",
+        template="plotly_white",
+        width=1200,
+        height=600
+    )
+    
+    # Update x-axis to display month abbreviations.
+    fig.update_xaxes(
+        tickformat="%b",
+        dtick="M1"  # tick every month
+    )
+    
+    fig.show()
+
+
+
+import plotly.graph_objects as go
+import pandas as pd
+
+def plot_event_overlap_with_positions(trade_df: pd.DataFrame):
+    """
+    Creates an interactive Plotly chart showing:
+      - A bar chart for the number of dividend events per day.
+      - An overlaid line chart for the number of open positions on each day,
+        calculated using the 'buy_date' and 'sell_date' columns.
+
+    For each trade, it is assumed that the position is open from the buy_date through the sell_date (inclusive).
+    The function counts the dividend events by converting 'ex_div_date' to a date (dropping time) and grouping.
+    Then it iterates over each trade and, for each day between buy_date and sell_date, increments a counter.
+    
+    Parameters:
+        trade_df (pd.DataFrame): DataFrame containing trade data. Must include:
+            - 'ex_div_date': The datetime when the dividend event occurred.
+            - 'buy_date': The date when the position was opened.
+            - 'sell_date': The date when the position was closed.
+    
+    Returns:
+        None. Displays an interactive Plotly chart.
+    """
+    # Make a copy and ensure the relevant columns are datetime.
+    df = trade_df.copy()
+    df['ex_div_date'] = pd.to_datetime(df['ex_div_date'])
+    df['buy_date'] = pd.to_datetime(df['buy_date'])
+    df['sell_date'] = pd.to_datetime(df['sell_date'])
+    
+    # Create a column with just the date (no time) for ex_div_date.
+    df['date_only'] = df['ex_div_date'].dt.date
+    
+    # Group by the date to count the number of dividend events per day.
+    event_counts = df.groupby('date_only').size().reset_index(name='count')
+    event_counts['date_only'] = pd.to_datetime(event_counts['date_only'])
+    
+    # Compute open positions per day.
+    open_positions = {}
+    for _, row in df.iterrows():
+        # Normalize buy_date and sell_date (drop time component).
+        start_date = row['buy_date'].normalize()
+        end_date = row['sell_date'].normalize()
+        # For each day between start and end, add 1 to the open positions count.
+        for d in pd.date_range(start=start_date, end=end_date, freq='D'):
+            open_positions[d] = open_positions.get(d, 0) + 1
+            
+    open_positions_series = pd.Series(open_positions).sort_index()
+    
+    # Create the Plotly figure.
+    fig = go.Figure()
+    
+    # Add the bar chart for dividend events.
+    fig.add_trace(go.Bar(
+        x=event_counts['date_only'],
+        y=event_counts['count'],
+        name="Dividend Events",
+        marker_color="blue"
+    ))
+    
+    # Add the line chart for open positions.
+    fig.add_trace(go.Scatter(
+        x=open_positions_series.index,
+        y=open_positions_series.values,
+        mode='lines',
+        name="Open Positions",
+        line=dict(color='grey', width=1)
+    ))
+    
+    # Update the layout.
+    fig.update_layout(
+        title="Event Overlap Analysis: Dividend Events and Open Positions",
+        xaxis_title="Date",
+        yaxis_title="Count",
+        template="plotly_white",
+        width=1200,
+        height=600
+    )
+    
+    # Optionally format the x-axis ticks.
+    fig.update_xaxes(tickformat="%Y-%m-%d")
+    
+    fig.show()
+
