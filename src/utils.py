@@ -14,7 +14,7 @@ def download_and_cache_data(ticker_list: list, period: str, cache_filename: str)
         for ticker in ticker_list:
             print(f"Downloading {ticker}...")
             stock = yf.Ticker(ticker)
-            hist_data = stock.history(period=period, actions=True)
+            hist_data = stock.history(period=period, actions=True, auto_adjust=False)
             # Add a column for ticker
             hist_data['Ticker'] = ticker
             all_data.append(hist_data)
