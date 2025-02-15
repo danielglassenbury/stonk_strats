@@ -2,3 +2,4 @@ __pycache__/
 *.pyc
 data/asx200_data.csv
 data/nzx50_data.csv
+data/asx200_axjo_index.csv
