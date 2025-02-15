@@ -1,2 +1,4 @@
+__pycache__/
+*.pyc
 data/asx200_data.csv
 data/nzx50_data.csv

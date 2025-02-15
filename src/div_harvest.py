@@ -2,7 +2,32 @@ import yfinance as yf
 import pandas as pd
 import time
 
-def cal_div_harvest(ticker_list: list, period: str, data: pd.DataFrame = None):
+def cal_div_harvest(ticker_list: list, period: str, bssr: float = 0.5, data: 'pd.DataFrame' = None):
+    """
+    Simulate dividend harvesting trades over a specified period.
+    
+    Parameters:
+        ticker_list (list): List of ticker symbols.
+        period (str): The period over which to retrieve historical data (e.g., '20y').
+        bssr (float): Buy Sell Success Rate, a value between 0 and 1.
+                      1 means best luck (buy at low, sell at high),
+                      0 means worst luck (buy at high, sell at low),
+                      and 0.5 means neutral (buy/sell at midpoint).
+        data (pd.DataFrame, optional): Preloaded historical data for all tickers.
+                                       If provided, should include a 'Ticker' column.
+    
+    Returns:
+        results_profit (pd.DataFrame): Aggregated profit per ticker by year.
+        results_pct (pd.DataFrame): Aggregated percentage returns per ticker by year.
+        results_trades (dict): Detailed trade information for each ticker.
+    """
+    import yfinance as yf
+    import pandas as pd
+    import time
+
+    # Validate that bssr is between 0 and 1.
+    assert 0 <= bssr <= 1, "bssr must be between 0 and 1."
+
     # Dictionaries to hold the yearly profit and percentage returns for each ticker
     results_yearly = {}
     results_yearly_pct = {}
@@ -15,31 +40,22 @@ def cal_div_harvest(ticker_list: list, period: str, data: pd.DataFrame = None):
         print(f"Processing {ticker}...")
         try:
             # If preloaded data is provided, filter it for the current ticker.
-            # It is assumed that the preloaded dataframe has a column named "Ticker".
             if data is not None:
                 hist_data = data[data['Ticker'] == ticker].copy()
             else:
-                print(f'Downloading {ticker} data from Yahoo Finance')
                 stock = yf.Ticker(ticker)
                 hist_data = stock.history(period=period, actions=True)
-
-            # Ensure the index is datetime (if not already)
-            if not pd.api.types.is_datetime64_any_dtype(hist_data.index):
-                hist_data.index = pd.to_datetime(hist_data.index)
-
-            # Convert tz-aware datetimes to tz-naive via UTC conversion
-            if hist_data.index.tz is not None:
-                hist_data.index = hist_data.index.tz_convert('UTC').tz_localize(None)
-
 
             # Skip if no data is returned
             if hist_data.empty:
                 print(f"  No historical data for {ticker}.")
                 continue
 
-            # Ensure the index is datetime (if not already)
+            # Ensure the index is datetime and tz-naive
             if not pd.api.types.is_datetime64_any_dtype(hist_data.index):
                 hist_data.index = pd.to_datetime(hist_data.index)
+            if hist_data.index.tz is not None:
+                hist_data.index = hist_data.index.tz_convert('UTC').tz_localize(None)
 
             # Fill missing dividend values with 0
             hist_data['Dividends'] = hist_data['Dividends'].fillna(0)
@@ -72,11 +88,13 @@ def cal_div_harvest(ticker_list: list, period: str, data: pd.DataFrame = None):
                 if idx == 0 or idx >= len(hist_data) - 1:
                     continue
 
-                # Simulate the trade:
-                # Buy the day before the ex-dividend date
+                # Get the daily high and low for the buy day (day before ex-dividend)
                 buy_date = hist_data.index[idx - 1]
-                # Use average of High and Low for the buy price
-                buy_price = (hist_data.loc[buy_date, 'High'] + hist_data.loc[buy_date, 'Low']) / 2.0
+                daily_high_buy = hist_data.loc[buy_date, 'High']
+                daily_low_buy = hist_data.loc[buy_date, 'Low']
+
+                # Calculate buy price based on bssr
+                buy_price = (1 - bssr) * daily_high_buy + bssr * daily_low_buy
 
                 # Check for negative buy price. If found, skip this ticker.
                 if buy_price < 0:
@@ -84,10 +102,14 @@ def cal_div_harvest(ticker_list: list, period: str, data: pd.DataFrame = None):
                     bad_stock = True
                     break
 
-                # Sell the day after the ex-dividend date
+                # Get the daily high and low for the sell day (day after ex-dividend)
                 sell_date = hist_data.index[idx + 1]
-                # Use average of High and Low for the sell price
-                sell_price = (hist_data.loc[sell_date, 'High'] + hist_data.loc[sell_date, 'Low']) / 2.0
+                daily_high_sell = hist_data.loc[sell_date, 'High']
+                daily_low_sell = hist_data.loc[sell_date, 'Low']
+
+                # Calculate sell price based on bssr
+                sell_price = bssr * daily_high_sell + (1 - bssr) * daily_low_sell
+
                 # Dividend received on the ex-dividend date
                 dividend = hist_data.loc[ex_div_date, 'Dividends']
 
@@ -97,13 +119,8 @@ def cal_div_harvest(ticker_list: list, period: str, data: pd.DataFrame = None):
 
                 # Use the ex-dividend date's year for grouping
                 year = ex_div_date.year
-                if year not in yearly_profits:
-                    yearly_profits[year] = 0.0
-                yearly_profits[year] += profit
-
-                if year not in yearly_pct:
-                    yearly_pct[year] = 0.0
-                yearly_pct[year] += pct_return
+                yearly_profits[year] = yearly_profits.get(year, 0.0) + profit
+                yearly_pct[year] = yearly_pct.get(year, 0.0) + pct_return
 
                 # Save the individual trade details for later investigation
                 trades_details.append({
@@ -137,16 +154,13 @@ def cal_div_harvest(ticker_list: list, period: str, data: pd.DataFrame = None):
         except Exception as e:
             print(f"  Error processing {ticker}: {e}")
 
-        # Pause to be kind to Yahoo Finance's servers (only when downloading live data)
+        # Pause to be kind to Yahoo Finance's servers if we're fetching live data.
         if data is None:
-            time.sleep(0.5)
+            time.sleep(1)
 
-    results_pct = pd.DataFrame.from_dict(results_yearly_pct, orient='index')
-    results_pct = results_pct.fillna(0)
+    results_pct = pd.DataFrame.from_dict(results_yearly_pct, orient='index').fillna(0)
     results_pct = results_pct[sorted(results_pct.columns, key=int)]
-
-    results_profit = pd.DataFrame.from_dict(results_yearly, orient='index')
-    results_profit = results_profit.fillna(0)
+    results_profit = pd.DataFrame.from_dict(results_yearly, orient='index').fillna(0)
     results_profit = results_profit[sorted(results_profit.columns, key=int)]
 
     return results_profit, results_pct, results_trades
